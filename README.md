@@ -100,19 +100,6 @@ python3 run_listeners.py --log-connections --log-level DEBUG
 - Minimal input validation
 - Designed for controlled lab environments only
 - May be vulnerable to denial-of-service attacks
-
-## Testing with Zeek
-
-1. Start the listeners:
-   ```bash
-   python3 run_listeners.py --log-connections
-   ```
-
-2. Generate traffic using ICS client tools or scripts
-
-3. Monitor with Zeek:
-   ```bash
-   zeek -i interface local "icsnpp/*"
    ```
 
 ## Development
@@ -131,10 +118,6 @@ python3 run_listeners.py --log-connections --log-level DEBUG
 2. Add appropriate logging
 3. Include protocol documentation
 4. Test with actual Zeek parsers
-
-## License
-
-[Add license information]
 
 ## Acknowledgments
 
