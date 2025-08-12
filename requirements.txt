@@ -1,0 +1,14 @@
+# ICSNPP Listeners Requirements
+# No external dependencies - uses only Python standard library
+
+# Python 3.7+ required for:
+# - asyncio improvements
+# - dataclasses (if using config.py)
+# - f-strings
+# - typing annotations
+
+# For development/testing:
+# pytest>=6.0.0
+# black>=21.0.0
+# flake8>=3.8.0
+# mypy>=0.800
