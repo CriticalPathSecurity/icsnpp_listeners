@@ -3,12 +3,13 @@
 # ICSNPP Listeners Daemon Management Script
 # Usage: ./icsnpp_daemon.sh {start|stop|restart|status}
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PYTHON_SCRIPT="$SCRIPT_DIR/run_listeners.py"
 PID_FILE="/tmp/icsnpp_listeners.pid"
 LOG_FILE="/tmp/icsnpp_listeners.log"
 
 start() {
+    # Check if already running
     if [ -f "$PID_FILE" ]; then
         PID=$(cat "$PID_FILE")
         if kill -0 "$PID" 2>/dev/null; then
@@ -20,7 +21,37 @@ start() {
         fi
     fi
     
+    # Ensure we can write to the PID file location
+    PID_DIR=$(dirname "$PID_FILE")
+    if [ ! -w "$PID_DIR" ]; then
+        echo "Error: Cannot write to PID file directory: $PID_DIR"
+        echo "Please run as root or change PID_FILE location"
+        return 1
+    fi
+    
+    # Ensure we can write to the log file location
+    LOG_DIR=$(dirname "$LOG_FILE")
+    if [ ! -w "$LOG_DIR" ]; then
+        echo "Error: Cannot write to log file directory: $LOG_DIR"
+        echo "Please run as root or change LOG_FILE location"
+        return 1
+    fi
+    
     echo "Starting ICSNPP listeners..."
+    
+    # Check if Python3 is available
+    if ! command -v python3 >/dev/null 2>&1; then
+        echo "Error: python3 not found in PATH"
+        return 1
+    fi
+    
+    # Check if the Python script exists
+    if [ ! -f "$PYTHON_SCRIPT" ]; then
+        echo "Error: Python script not found: $PYTHON_SCRIPT"
+        return 1
+    fi
+    
+    # Start the service
     nohup python3 "$PYTHON_SCRIPT" \
         --daemon \
         --pid-file "$PID_FILE" \
@@ -29,8 +60,10 @@ start() {
         --quiet \
         > "$LOG_FILE" 2>&1 &
     
-    sleep 2
+    # Give it time to start and create PID file
+    sleep 3
     
+    # Check if the service started successfully
     if [ -f "$PID_FILE" ]; then
         PID=$(cat "$PID_FILE")
         if kill -0 "$PID" 2>/dev/null; then
@@ -38,12 +71,25 @@ start() {
             echo "Log file: $LOG_FILE"
             return 0
         else
-            echo "Failed to start ICSNPP listeners"
-            cat "$LOG_FILE"
+            echo "Process died after startup (PID: $PID)"
+            echo "Check log file for errors: $LOG_FILE"
+            if [ -f "$LOG_FILE" ]; then
+                echo "Last 10 lines of log:"
+                tail -n 10 "$LOG_FILE"
+            fi
             return 1
         fi
     else
-        echo "Failed to create PID file"
+        echo "Failed to create PID file: $PID_FILE"
+        echo "This could be due to:"
+        echo "  - Permission issues (try running as root)"
+        echo "  - Python script startup error"
+        echo "  - Missing dependencies"
+        if [ -f "$LOG_FILE" ]; then
+            echo "Check log file for details: $LOG_FILE"
+            echo "Last 20 lines of log:"
+            tail -n 20 "$LOG_FILE"
+        fi
         return 1
     fi
 }

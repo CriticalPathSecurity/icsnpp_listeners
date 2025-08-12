@@ -49,7 +49,56 @@ def add_crc_blocks(payload: bytes, first=8, subsequent=16) -> bytes:
         if firstflag: firstflag=False; blk=subsequent
     return bytes(out)
 
-def build_ack(dest=1,src=100):
+# ICSNPP-compliant DNP3 response builders
+def build_ack():
+    """Build basic DNP3 acknowledgment"""
+    header = struct.pack("<BBBBHH", 0x05, 0x64, 5, 0x00, 1, 1024)
+    app_layer = struct.pack("<BB", 0xC0, 0x81)  # Application response
+    return add_crc_blocks(header + app_layer)
+
+def build_response(dest, src, app_control):
+    """Build generic DNP3 response"""
+    header = struct.pack("<BBBBHH", 0x05, 0x64, 5, 0x00, dest, src)
+    app_layer = struct.pack("<BB", app_control & 0x0F | 0x80, 0x81)  # Response
+    return add_crc_blocks(header + app_layer)
+
+def build_read_response(dest, src, app_control):
+    """Build DNP3 read response with objects (ICSNPP compliant)"""
+    header = struct.pack("<BBBBHH", 0x05, 0x64, 5, 0x00, dest, src)
+    app_layer = struct.pack("<BB", app_control & 0x0F | 0x80, 0x81)  # Response
+    
+    # Add Binary Input objects (Group 1, Variation 2) - ICSNPP standard
+    objects = struct.pack("<BBBBB", 0x01, 0x02, 0x00, 0x00, 0x07)  # Group 1, Var 2, range 0-7
+    objects += b"\x81"  # Binary input states (flags + bit pattern)
+    
+    # Add Analog Input objects (Group 30, Variation 1) - ICSNPP standard  
+    objects += struct.pack("<BBBBB", 0x1E, 0x01, 0x00, 0x00, 0x03)  # Group 30, Var 1, range 0-3
+    objects += struct.pack("<IIII", 0x8100, 0x8200, 0x8300, 0x8400)  # Analog values with flags
+    
+    return add_crc_blocks(header + app_layer + objects)
+
+def build_control_response(dest, src, app_control, operation):
+    """Build DNP3 control response (ICSNPP compliant)"""
+    header = struct.pack("<BBBBHH", 0x05, 0x64, 5, 0x00, dest, src)
+    app_layer = struct.pack("<BB", app_control & 0x0F | 0x80, 0x81)  # Response
+    
+    # Add Control Relay Output Block response (Group 12, Variation 1) - ICSNPP standard
+    objects = struct.pack("<BBBBB", 0x0C, 0x01, 0x00, 0x00, 0x00)  # Group 12, Var 1, index 0
+    
+    # CROB response with status
+    if operation == "SELECT":
+        status = 0x00  # Success
+    elif operation in ["OPERATE", "DIRECT_OPERATE"]:
+        status = 0x00  # Success
+    else:
+        status = 0x04  # Not supported
+        
+    crob_response = struct.pack("<BBHHLB", 0x41, 0x01, 100, 100, 0, status)  # Control code, count, on/off time, status
+    
+    return add_crc_blocks(header + app_layer + objects + crob_response)
+
+def build_legacy_ack(dest=1,src=100):
+    """Legacy ACK builder for backward compatibility"""
     hdr = bytes([0x05,0x64,0x05,0x80]) + struct.pack("<H", dest) + struct.pack("<H", src)
     framed = hdr[:2] + add_crc_blocks(hdr[2:], first=8, subsequent=16)
     return framed
@@ -102,16 +151,43 @@ class DNP3Server:
                 request_count += 1
                 logger.debug(f"Request {request_count} from {client_addr}: {len(data)} bytes")
                 
-                # Enhanced DNP3 frame validation
-                if len(data) >= 8:  # Minimum DNP3 frame size
+                # Enhanced DNP3 frame validation and object handling (ICSNPP compliant)
+                if len(data) >= 10:  # Minimum DNP3 frame with application layer
                     if data[0] == 0x05 and data[1] == 0x64:  # DNP3 sync bytes
                         logger.debug(f"Valid DNP3 frame from {client_addr}")
+                        
+                        # Parse DNP3 header for ICSNPP compliance
+                        length = data[2]
+                        control = data[3]
+                        dest = struct.unpack("<H", data[4:6])[0]
+                        src = struct.unpack("<H", data[6:8])[0]
+                        
+                        # Parse application layer if present
+                        if len(data) > 10:
+                            app_control = data[10] if len(data) > 10 else 0
+                            func_code = data[11] if len(data) > 11 else 0
+                            
+                            logger.debug(f"DNP3 App Layer: Control=0x{app_control:02x}, Function=0x{func_code:02x}")
+                            
+                            # Handle specific function codes for ICSNPP compliance
+                            if func_code == 0x01:  # READ
+                                response = build_read_response(dest, src, app_control)
+                            elif func_code == 0x03:  # SELECT
+                                response = build_control_response(dest, src, app_control, "SELECT")
+                            elif func_code == 0x04:  # OPERATE
+                                response = build_control_response(dest, src, app_control, "OPERATE")
+                            elif func_code == 0x05:  # DIRECT_OPERATE
+                                response = build_control_response(dest, src, app_control, "DIRECT_OPERATE")
+                            else:
+                                response = build_response(dest, src, app_control)
+                        else:
+                            response = build_ack()
                     else:
                         logger.debug(f"Invalid DNP3 sync bytes from {client_addr}: {data[:2].hex()}")
+                        response = build_ack()
                 else:
                     logger.debug(f"DNP3 frame too short from {client_addr}: {len(data)} bytes")
-                
-                response = build_ack()
+                    response = build_ack()
                 writer.write(response)
                 await writer.drain()
                 
